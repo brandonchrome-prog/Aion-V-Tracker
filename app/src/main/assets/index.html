@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Aion V Planner</title>
+<style>
+:root{color-scheme:light;font:17px system-ui;color:#17352a;background:#f6f5ee}*{box-sizing:border-box}body{margin:0}main{max-width:530px;margin:auto;padding:28px 20px 48px}header{display:flex;align-items:center;justify-content:space-between;margin-bottom:22px;font-weight:750}h1{font-size:2rem;line-height:1.1;margin:0 0 12px}h2{font-size:1.35rem}p{line-height:1.5}small,.muted{color:#4c655a}button,input,select{font:inherit}button{cursor:pointer;border:0;border-radius:14px;background:#e2ece4;color:#17352a;padding:13px;min-height:48px;font-weight:650}button.primary{background:#19583e;color:white}button.wide{width:100%;margin-top:9px;text-align:left}section,.card{background:white;border-radius:22px;padding:20px;margin:13px 0}.hero{background:#dceee1}.metrics{display:grid;grid-template-columns:1fr 1fr;gap:12px}.metrics strong{display:block;font-size:1.45rem}.actions{display:flex;gap:10px;flex-wrap:wrap}.actions>*{flex:1}dialog{width:min(94%,510px);max-height:92dvh;overflow:auto;border:0;border-radius:22px;padding:22px;color:inherit}dialog::backdrop{background:#172c24aa}label{display:block;margin:13px 0}input,select{display:block;width:100%;padding:10px;border:1px solid #8ba499;border-radius:10px;margin-top:5px;background:white;color:inherit}input[type=checkbox]{width:22px;display:inline-block;margin-right:8px}summary{cursor:pointer;padding:8px 0}.row{border-bottom:1px solid #dce6de;padding:9px 0}.list{max-height:36dvh;overflow:auto}.notice{min-height:1.4em}.error{color:#922e26}button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible{outline:3px solid #08745f;outline-offset:2px}
+
+:root{background:#f5f6ef;color:#15342b}
+main{padding-top:20px}
+header{letter-spacing:-.025em}
+header button{background:transparent;border:1px solid #c8d5ca;border-radius:30px;padding-inline:17px}
+.hero{background:radial-gradient(ellipse at 100% 0%,#2d7254,transparent 65%),#123f32;color:#fff;border-radius:28px;padding:24px;box-shadow:0 12px 28px #153b3022}
+.hero p{color:#d7eee0;font-size:.95rem}
+.hero .primary{background:#b7f593;color:#123f32;padding-inline:19px;border-radius:30px}
+.battery-reading{font-size:3.25rem;font-weight:760;letter-spacing:-.07em;line-height:1;margin:10px 0 16px;font-variant-numeric:tabular-nums}
+.battery-reading[hidden]{display:none}
+h1{font-size:1.7rem;letter-spacing:-.035em}
+h2{letter-spacing:-.025em;margin-top:0}
+.metrics>div{background:#f0f5ee;padding:12px;border-radius:15px}
+#weekDetail{font-size:.88rem;margin-bottom:0}
+.wide{display:flex;align-items:center;justify-content:space-between;border-radius:16px;padding:15px 17px}
+.wide::after{content:"›";font-size:1.35rem;line-height:1}
+dialog[open]{animation:appear .2s ease-out}
+@keyframes appear{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:none}}
+@media(max-width:600px){dialog{width:100%;max-width:none;margin:auto 0 0;border-radius:24px 24px 0 0;padding-bottom:28px}}
+@media(prefers-reduced-motion:reduce){dialog[open]{animation:none}}
+</style>
+<main><header><span>Aion V Planner</span><button id="settings">Settings</button></header>
+<section class="hero"><div id="reading" class="battery-reading" hidden></div><h1 id="headline"></h1><p id="explanation"></p><button class="primary" id="battery">Update battery %</button></section>
+<section><h2>This week</h2><div class="metrics"><div><strong id="km"></strong><small>Distance logged</small></div><div><strong id="added"></strong><small>Energy added</small></div></div><p class="muted" id="weekDetail"></p></section>
+<button class="wide primary" id="charge">Log a charge</button><button class="wide" id="drive">Log a drive</button><button class="wide" id="import">Import trips from Google Maps</button><button class="wide" id="plan">Compare charging options</button><button class="wide" id="history">View history</button>
+<p id="notice" class="notice" role="status"></p></main>
+<dialog id="dialog"><form id="form"><h2 id="title"></h2><div id="fields"></div><p id="error" class="error" role="alert"></p><div class="actions"><button type="button" id="close">Close</button><button class="primary" id="save">Save</button></div></form></dialog>
+<script>
+'use strict';
+const el = id => document.getElementById(id);
+const jamaicaDate = new Intl.DateTimeFormat('en', {timeZone:'America/Jamaica',year:'numeric',month:'2-digit',day:'2-digit'});
+function dateKey(date = new Date()) {
+    const parts = Object.fromEntries(jamaicaDate.formatToParts(date).map(part => [part.type, part.value]));
+    return [parts.year,parts.month,parts.day].join('-');
+}
+const fmt = x => Number(x.toFixed(1)).toLocaleString();
+const key = 'aion-v-planner-v1';
+const defaults = {daily:27, efficiency:18, capacity:75, reserve:20, homePower:1, homeHours:9, homeRate:null, publicEnergy:25, publicRate:null, solar:0};
+let state;
+try { state = JSON.parse(localStorage.getItem(key)) || {}; } catch { state = {}; }
+state = {drives:[], charges:[], battery:null, ...state, settings:{...defaults,...state.settings}};
+const number = (name, label, options = {}) => `<label>${label}<input name="${name}" type="number" inputmode="decimal" min="${options.min ?? 0}" max="${options.max ?? 10000}" step="any" value="${options.value ?? ''}" ${options.optional ? '' : 'required'}></label>`;
+const dateField = (name,label,value=dateKey()) => `<label>${label}<input type="date" name="${name}" value="${value}" required></label>`;
+function commit(next, message) {
+    localStorage.setItem(key, JSON.stringify(next));
+    state = next;
+    render();
+    el('dialog').close();
+    el('notice').textContent = message;
+}
+function weekStart() {
+    const today = new Date(dateKey() + 'T12:00:00Z');
+    today.setUTCDate(today.getUTCDate() - (today.getUTCDay() + 6) % 7);
+    return dateKey(today);
+}
+function render() {
+    const start = weekStart(), today = dateKey();
+    const inWeek = item => item.date >= start && item.date <= today;
+    const drives = state.drives.filter(inWeek), charges = state.charges.filter(inWeek);
+    const km = drives.reduce((sum, item) => sum + item.km, 0);
+    const energy = charges.reduce((sum, item) => sum + (item.energy ?? 0), 0);
+    el('km').textContent = fmt(km) + ' km';
+    el('added').textContent = charges.some(item => item.energy !== null) ? fmt(energy) + ' kWh' : '—';
+    const costs = charges.filter(item => item.cost !== null);
+    const incomplete = costs.length < charges.length || charges.some(item => item.energy === null);
+    el('weekDetail').textContent = `Estimated driving use ${fmt(km * state.settings.efficiency / 100)} kWh` +
+        (costs.length ? ` · J$ ${fmt(costs.reduce((sum,item) => sum + item.cost,0))} logged` : '') +
+        (incomplete ? ' · Some charge details are missing' : '');
+    el('reading').hidden = !state.battery;
+    el('reading').textContent = state.battery ? fmt(state.battery.percent) + '%' : '';
+    if (!state.battery) {
+        el('headline').textContent = 'Do I need to charge?';
+        el('explanation').textContent = 'Enter the battery percentage shown on your dashboard to check your next commute.';
+        return;
+    }
+    const elapsed = state.drives.some(item => item.date > state.battery.date) || state.charges.some(item => item.date > state.battery.date);
+    const {daily, efficiency, capacity, reserve} = state.settings;
+    const remaining = state.battery.percent - daily * efficiency / capacity;
+    const sameDay = state.battery.date === today && !elapsed;
+    el('headline').textContent = sameDay ? (remaining < reserve ? 'Plan a charge before your next drive' : 'You likely have enough for your next drive') : 'Check your current battery';
+    el('explanation').textContent = `Last updated on ${state.battery.date}. ` +
+        (sameDay ? `A ${fmt(daily)} km drive leaves an estimated ${fmt(Math.max(0, remaining))}% with a ${reserve}% reserve target.` : 'Update it to check your next commute.');
+}
+function open(title, content, onSave, button = 'Save') {
+    if (el('dialog').open) el('dialog').close();
+    el('title').textContent = title;
+    el('fields').innerHTML = content;
+    el('error').textContent = '';
+    el('save').hidden = !onSave;
+    el('save').textContent = button;
+    el('form').onsubmit = async event => {
+        event.preventDefault();
+        if (!onSave) return;
+        el('save').disabled = true;
+        el('error').textContent = '';
+        try { await onSave(new FormData(el('form'))); }
+        catch (error) { el('error').textContent = error.message || 'Unable to save. Please try again.'; }
+        finally { el('save').disabled = false; }
+    };
+    el('dialog').showModal();
+}
+const get = (data, name) => data.get(name) === '' ? null : Number(data.get(name));
+el('close').onclick = () => el('dialog').close();
+el('battery').onclick = () => open('What does your dashboard show?', number('percent','Battery percentage',{max:100,value:state.battery?.percent}), data =>
+    commit({...state,battery:{percent:get(data,'percent'),date:dateKey()}},'Battery updated.'));
+el('drive').onclick = () => open('How far did you drive?', number('km','Distance in kilometres',{min:0.1}) +
+    `<details><summary>Date and driving conditions</summary>${dateField('date','Trip date')}<label>Route<select name="route"><option>Usual</option><option>Hilly</option><option>Highway</option><option>Stop-and-go</option></select></label><label>Weather<select name="weather"><option>Not recorded</option><option>Dry</option><option>Rain</option><option>Very hot</option></select></label><label><input type="checkbox" name="family"> Family on board</label></details>`,
+    data => commit({...state,drives:[...state.drives,{km:get(data,'km'),date:data.get('date'),route:data.get('route'),weather:data.get('weather'),family:data.has('family')}]},'Drive saved.'));
+function chargeDetails(place) {
+    open(`Log a ${place === 'Home' ? 'home' : 'public'} charge`,
+        (place === 'Home' ? number('hours','Hours plugged in',{min:0.01,max:168}) : number('energy','Energy from charger receipt (kWh)',{optional:true,max:250})) +
+        `<details><summary>Receipt, date and battery reading</summary>${dateField('date','Charge date')}${number('percent','Battery % after charging',{optional:true,max:100})}${number('cost','Amount paid (J$)',{optional:true,max:1000000})}${place === 'Public' ? number('hours','Hours plugged in',{optional:true,max:168}) : ''}</details>`,
+        data => {
+            const date = data.get('date'), hours = get(data,'hours'), percent = get(data,'percent');
+            const wallEnergy = place === 'Home' ? hours * state.settings.homePower : null;
+            const energy = wallEnergy === null ? get(data,'energy') : wallEnergy * 0.85;
+            const rate = place === 'Home' ? state.settings.homeRate : state.settings.publicRate;
+            const billable = wallEnergy ?? energy;
+            const cost = get(data,'cost') ?? (rate === null || billable === null ? null : rate * billable);
+            if (hours === null && energy === null && cost === null && percent === null) throw Error('Enter one detail from your charge to save it.');
+            commit({...state,battery:date === dateKey() && percent !== null ? {percent,date} : state.battery,charges:[...state.charges,{date,place,hours,energy,cost,estimated:place === 'Home'}]},'Charge saved.');
+        });
+}
+el('charge').onclick = () => {
+    open('Where did you charge?', '<div class="actions"><button type="button" id="home">At home</button><button type="button" id="public">At a public charger</button></div>',null);
+    el('home').onclick = () => chargeDetails('Home');
+    el('public').onclick = () => chargeDetails('Public');
+};
+function readTrips(fileText) {
+    const file = JSON.parse(fileText);
+    if (!Array.isArray(file.semanticSegments)) throw Error('Choose the Timeline.json file exported from Google Maps.');
+    const trips = new Map();
+    for (const segment of file.semanticSegments) {
+        if (segment?.activity?.topCandidate?.type !== 'IN_PASSENGER_VEHICLE') continue;
+        const start = Date.parse(segment.startTime), end = Date.parse(segment.endTime);
+        const km = Number(segment.activity.distanceMeters) / 1000;
+        if (!Number.isFinite(start) || !Number.isFinite(end) || end < start || !Number.isFinite(km) || km <= 0) continue;
+        const id = start + '/' + end;
+        trips.set(id,{id,km,date:dateKey(new Date(start)),minutes:Math.round((end-start)/60000),start});
+    }
+    return [...trips.values()].sort((a,b) => a.start-b.start);
+}
+function reviewTrips(trips, from, through) {
+    const saved = new Set(state.drives.map(item => item.id));
+    const candidates = trips.filter(trip => trip.date >= from && trip.date <= through && !saved.has(trip.id));
+    const byDay = new Map();
+    for (const trip of candidates) {
+        if (!byDay.has(trip.date)) byDay.set(trip.date,[]);
+        byDay.get(trip.date).push(trip);
+    }
+    const rows = [...byDay].map(([day, items]) => `<details class="row"><summary>${day} · ${items.length} trips · ${fmt(items.reduce((sum,item) => sum+item.km,0))} km</summary>` +
+        items.map(item => `<label><input type="checkbox" name="trip" value="${item.id}" checked>${new Date(item.start).toLocaleTimeString('en-JM',{timeZone:'America/Jamaica',hour:'numeric',minute:'2-digit'})} · ${fmt(item.km)} km · ${item.minutes} min</label>`).join('') + '</details>').join('');
+    open('Confirm your Aion V trips', candidates.length
+        ? `<p>${candidates.length} new trips. Open a day to untick any rides in another vehicle.</p><div class="list">${rows}</div>`
+        : '<p>No new passenger-vehicle trips in those dates.</p>', candidates.length ? data => {
+        const checked = new Set(data.getAll('trip'));
+        const confirmed = candidates.filter(item => checked.has(item.id));
+        if (!confirmed.length) throw Error('Select at least one trip.');
+        commit({...state,importFrom:from,drives:[...state.drives,...confirmed]},`Saved ${confirmed.length} trips.`);
+    } : null, 'Save selected trips');
+}
+el('import').onclick = () => open('Choose your Timeline file',
+    '<p>Select the Timeline.json export from Google Maps. The file is processed on this device.</p><label>Timeline file<input name="file" type="file" accept=".json,application/json" required></label>',
+    async data => {
+        const file = data.get('file');
+        if (!file?.size) throw Error('Choose a Timeline.json file.');
+        const trips = readTrips(await file.text());
+        if (!trips.length) throw Error('No passenger-vehicle trips with distances were found.');
+        open('Which days were you driving the Aion V?',
+            '<p>Start with the day you began driving it. Use a shorter range if you shared rides that week.</p>' +
+            dateField('from','First day',state.importFrom ?? weekStart()) + dateField('through','Last day',dateKey()),
+            range => {
+                if (range.get('from') > range.get('through')) throw Error('Choose a last day on or after the first day.');
+                reviewTrips(trips,range.get('from'),range.get('through'));
+            },'Review trips');
+    },'Continue');
+el('settings').onclick = () => {
+    const s = state.settings;
+    open('Your driving and charging', number('daily','Typical commute (km per day)',{value:s.daily,min:1,max:1000}) +
+        `<details><summary>Charging and battery settings</summary>${number('capacity','Battery capacity (kWh)',{value:s.capacity,min:1,max:250})}
+        ${number('efficiency','Estimated driving use (kWh per 100 km)',{value:s.efficiency,min:1,max:100})}
+        ${number('reserve','Preferred battery reserve (%)',{value:s.reserve,max:100})}
+        ${number('homePower','Home charging power (kW)',{value:s.homePower,max:40})}
+        ${number('homeHours','Home charging hours per week',{value:s.homeHours,max:168})}
+        ${number('homeRate','Home electricity rate (J$ per kWh)',{value:s.homeRate,optional:true})}
+        ${number('publicEnergy','Public charger energy per week (kWh)',{value:s.publicEnergy,max:500})}
+        ${number('publicRate','Public charging rate (J$ per kWh)',{value:s.publicRate,optional:true})}
+        ${number('solar','Extra solar or storage energy available to the car per week (kWh)',{value:s.solar,max:500})}</details>`,
+    data => commit({...state,settings:Object.fromEntries(Object.keys(defaults).map(name => [name,get(data,name)]))},'Settings saved.'));
+};
+el('plan').onclick = () => {
+    const s = state.settings, need = s.daily * 5 * s.efficiency / 100;
+    const wall = s.homePower * s.homeHours, home = wall * 0.85;
+    const cost = (energy,rate) => rate === null ? ' · Rate not set' : ` · J$ ${fmt(energy * rate)}`;
+    const scenario = (name, energy, price) => `<div class="row"><strong>${name}</strong><p>${fmt(energy)} kWh${price}<br>${energy >= need ? 'Covers the estimated weekly commute' : 'Short by ' + fmt(need-energy) + ' kWh'}</p></div>`;
+    open('Will my charging cover the week?', `<p>Five commute days at ${fmt(s.daily)} km per day need about <strong>${fmt(need)} kWh</strong>.</p>` +
+        scenario('Home outlet only',home,cost(wall,s.homeRate)) +
+        scenario('Public charging only',s.publicEnergy,cost(s.publicEnergy,s.publicRate)) +
+        scenario('Home and public',home+s.publicEnergy,s.homeRate === null || s.publicRate === null ? '' : ` · J$ ${fmt(wall*s.homeRate+s.publicEnergy*s.publicRate)}`) +
+        scenario('Home with extra solar or storage',home+s.solar,'') +
+        '<p class="muted">Home estimates assume 85% charging efficiency. Change hours, rates and solar in Settings.</p>',null);
+};
+el('history').onclick = () => {
+    const rows = [
+        ...state.drives.map(item => ({date:item.date,text:`Drive · ${fmt(item.km)} km${item.minutes === undefined ? '' : ' · '+item.minutes+' min'}`})),
+        ...state.charges.map(item => ({date:item.date,text:`${item.place} charge${item.energy === null ? '' : ' · '+fmt(item.energy)+' kWh'+(item.estimated?' estimated':' recorded')}${item.cost === null ? '' : ' · J$ '+fmt(item.cost)}`}))
+    ].sort((a,b) => b.date.localeCompare(a.date));
+    open('History',rows.length ? '<div id="historyRows" class="list"></div>' : '<p>Your saved drives and charges will appear here.</p>',null);
+    for (const item of rows) {
+        const row = document.createElement('div');
+        row.className = 'row';
+        row.textContent = item.date + ' · ' + item.text;
+        el('historyRows').append(row);
+    }
+};
+render();
+</script></html>
