@@ -4,7 +4,7 @@ android {
     compileSdk 35
     defaultConfig {
         applicationId 'com.aionv.planner'
-        minSdk 26
+        minSdk 27
         targetSdk 34
         versionCode 1
         versionName '1.0'
